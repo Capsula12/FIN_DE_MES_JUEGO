@@ -1,0 +1,1132 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Fin de mes</title>
+<meta name="description" content="Un juego que juegan millones de personas todos los meses.">
+<meta property="og:title" content="Fin de mes">
+<meta property="og:description" content="Un juego que juegan millones de personas todos los meses.">
+<meta name="theme-color" content="#07071a">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=block" rel="stylesheet">
+<style>
+  html, body { margin:0; height:100%; background:#07071a; overflow:hidden; }
+  body { display:flex; align-items:center; justify-content:center; touch-action:manipulation; -webkit-user-select:none; user-select:none; }
+  canvas#c { display:block; width:min(100vw, calc(100dvh * 9 / 16)); height:auto; aspect-ratio:9/16; background:#000; }
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Fin de mes: juego sobre deudas"></canvas>
+<script>
+// ============================================================ constantes
+const OW = 1080, OH = 1920, W = 270, H = 480;
+const FONT = '"Press Start 2P", monospace';
+const COL = { hi:'#ffe135', red:'#ff4d4d', green:'#3ddc84', mut:'#9aa3b5', ml:'#ffe600', mlText:'#2d3277', nar:'#ff7a00' };
+const PAL = { skin:'#f1b98c', hair:'#4a2a14', momShirt:'#2e9e6a', pants:'#27304d', shoe:'#111', kid1:'#ff004d', kid2:'#29adff', kidHair:'#2b1a0e' };
+const DATA = { personasJul:5740129, personasAgo:5761876, deudaJul:26.8, deudaAgo:27.0 };
+// ============================================================ lienzos
+const c = document.getElementById('c'); c.width = OW; c.height = OH;
+const ctx = c.getContext('2d');
+// La tipografía pixel achica las mayúsculas con tilde (se ven como minúsculas): se dibuja la
+// letra normal y el tilde aparte, encima.
+const ACC = { 'Á': 'A', 'É': 'E', 'Í': 'I', 'Ó': 'O', 'Ú': 'U' };
+for (const fn of ['fillText', 'strokeText']) {
+  const orig = ctx[fn].bind(ctx);
+  ctx[fn] = (text, x, y) => {
+    text = String(text);
+    if (!/[ÁÉÍÓÚ]/.test(text)) return orig(text, x, y);
+    const base = text.replace(/[ÁÉÍÓÚ]/g, ch => ACC[ch]);
+    orig(base, x, y);
+    const wAll = ctx.measureText(base).width, adv = wAll / base.length, u = parseFloat(ctx.font.match(/([\d.]+)px/)[1]) / 8;
+    const x0 = ctx.textAlign === 'center' ? x - wAll / 2 : ctx.textAlign === 'right' ? x - wAll : x;
+    [...text].forEach((ch, i) => {
+      if (!ACC[ch]) return;
+      const cx = x0 + i * adv + adv * .5;
+      for (const [rx, ry] of [[cx, y - 10 * u], [cx - u, y - 9 * u]]) {
+        if (fn === 'fillText') ctx.fillRect(rx, ry, 2 * u, u); else ctx.strokeRect(rx, ry, 2 * u, u);
+      }
+    });
+  };
+}
+const wc = document.createElement('canvas'); wc.width = W; wc.height = H;
+let w = wc.getContext('2d');
+const wctx = w;
+const tmp = document.createElement('canvas'); tmp.width = 60; tmp.height = 60;
+const tctx = tmp.getContext('2d');
+// dibuja una figura al doble de tamaño: fn dibuja con ancla en (30, 50)
+function big(fn, ax, ay, s = 2) {
+  tctx.clearRect(0, 0, 60, 60); w = tctx; fn(30, 50); w = wctx;
+  w.imageSmoothingEnabled = false; w.drawImage(tmp, Math.round(ax - 30 * s), Math.round(ay - 50 * s), 60 * s, 60 * s);
+}
+
+// ============================================================ utilidades
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, k) => a + (b - a) * k;
+const ease = k => k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+const seg = (t, a, b) => ease(clamp((t - a) / (b - a), 0, 1));
+const win = (t, a, b, f = .25) => Math.min(seg(t, a, a + f), 1 - seg(t, b - f, b));
+const fmtInt = n => Math.round(n).toLocaleString('es-AR');
+const fmtPct = v => v.toFixed(1).replace('.', ',') + '%';
+function rand(i) { const x = Math.sin(i * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
+const blink = (t, hz = 3) => Math.floor(t * hz) % 2 === 0;
+
+// ---- dibujo en el mundo (píxeles de juego)
+function R(x, y, ww, hh, col) { w.fillStyle = col; w.fillRect(Math.round(x), Math.round(y), Math.round(ww), Math.round(hh)); }
+function disc(cx, cy, r, col) { w.fillStyle = col; for (let dy = -r; dy <= r; dy++) { const dx = Math.floor(Math.sqrt(r * r - dy * dy)); w.fillRect(Math.round(cx - dx), Math.round(cy + dy), dx * 2 + 1, 1); } }
+// ============================================================ personajes
+const SPR_PAL = { h: '#3b2314', H: '#6e4626', s: '#f1b98c', S: '#cf8d62', w: '#ffffff', e: '#1a1a2a', b: '#2b1a0e',
+  m: '#b5524a', g: '#2e9e6a', G: '#1f7a50', c: '#6fdca6', p: '#2d3a63', P: '#1b2440', k: '#151515', y: '#ffd23f' };
+const MOM_HEAD = [
+  ".....hhhhhh.....",
+  "...hhHHHhhhhh...",
+  "..hhHhhhhhhhhh..",
+  "..hhhhhhhhhhhh..",
+  "..hhhhssssssh...",
+  "..hhhsbbsssbb...",
+  "..hhhswesssswe..",
+  "..hhhssssssss...",
+  "..hhhsssssSss...",
+  "..hhhhssmmss....",
+  "..hhhh.sssS.....",
+  "..hhh...sS......"];
+const MOM_TORSO = [
+  "...h.cggggcc....",
+  "...GggggggggG...",
+  "..GGggggggggGG..",
+  "..GGggggggggGG..",
+  "..GGggyyggggGG..",
+  "..GGggggggggGG..",
+  "..GGggggggggGG..",
+  "..GGgggggggGGG.."];
+const MOM_REACH = [
+  "...h.cggggcc....",
+  "...GggggggggG...",
+  "..GGgggggggggGss",
+  "..GGgggggggg....",
+  "..GGggyygggg....",
+  "..GGgggggggg....",
+  "..GGgggggggg....",
+  "..GGgggggggg...."];
+const MOM_LEGS = [
+  "..sspppppppPss..",
+  "..sspppppppPss..",
+  "....pppppppP....",
+  "....pppP.ppP....",
+  "....pppP.ppP....",
+  "....pppP.ppP....",
+  "....pppP.ppP....",
+  "....pppP.ppP....",
+  "....pppP.ppP....",
+  "....pppP.ppP....",
+  "....kkkk.kkkk...",
+  "....kkkk.kkkk..."];
+const MOM_REACH_LEGS = ["..sspppppppP....", "..sspppppppP...."].concat(MOM_LEGS.slice(2));
+const MOM_LAP = [
+  "..ssggggggggss..",
+  "..pppppppppppppp",
+  "...pppppppppppPP",
+  "...........pppP.",
+  "...........pppP.",
+  "...........pppP.",
+  "...........pppP.",
+  "..........kkkkk.",
+  "..........kkkkk."];
+const KID = [
+  "..hhhhhh..",
+  ".hhHHhhhh.",
+  ".hhhhhhhh.",
+  ".hhsssssh.",
+  ".hhsesses.",
+  ".hhssssss.",
+  "..hsssmss.",
+  "...sssss..",
+  "..cggggc..",
+  ".GggggggG.",
+  ".GggggggG.",
+  ".GggggggG.",
+  ".sggggggs."];
+const KID_LEGS = ["..pppppp..", "..ppP.ppP.", "..ppP.ppP.", "..ppP.ppP.", "..kkk.kkk."];
+const KID_LAP = [".pppppppp.", "kppppppppk"];
+const blinking = (t, ph = 0) => ((t + ph) % 3.3) < .13;
+// dibuja un sprite con ancla en el centro de los pies
+function spr(rows, ax, ay, o = {}) {
+  const sc = o.scale || 2, g = o.ctx || w, pal = Object.assign({}, SPR_PAL, o.pal || {});
+  if (o.blink) pal.w = pal.e = pal.S;
+  const wd = rows[0].length, x0 = Math.round(ax - wd * sc / 2), y0 = Math.round(ay - rows.length * sc);
+  rows.forEach((r, j) => {
+    for (let i = 0; i < wd; i++) {
+      const ch = r[o.flip ? wd - 1 - i : i];
+      if (ch === '.') continue;
+      g.fillStyle = pal[ch]; g.fillRect(x0 + i * sc, y0 + j * sc, sc, sc);
+    }
+  });
+  return { x0, y0, sc };
+}
+const kidPal = shirt => ({ g: shirt, G: shade(shirt, -40), c: shade(shirt, 50), h: '#2b1a0e', H: '#4a2e18', m: '#c0605a' });
+function shade(hex, d) {
+  const n = parseInt(hex.slice(1), 16);
+  const f = v => Math.max(0, Math.min(255, v + d)).toString(16).padStart(2, '0');
+  return '#' + f(n >> 16) + f((n >> 8) & 255) + f(n & 255);
+}
+function momStand(x, feet, dir = 1, reach = false, t = 0, sc = 2) {
+  const rows = MOM_HEAD.concat(reach ? MOM_REACH : MOM_TORSO, reach ? MOM_REACH_LEGS : MOM_LEGS);
+  spr(rows, x, feet, { scale: sc, flip: dir < 0, blink: blinking(t) });
+}
+function momSit(x, feet, dir = 1, phone = false, t = 0, sc = 2) {
+  const rows = MOM_HEAD.concat(MOM_TORSO.slice(0, 7), MOM_LAP);
+  const { x0, y0 } = spr(rows, x, feet, { scale: sc, flip: dir < 0, blink: blinking(t, 1) });
+  if (phone) {
+    const sh = Math.round(Math.sin(t * 60));
+    R(x0 + 25 + sh, y0 + 14, 5, 10, '#111'); R(x0 + 26 + sh, y0 + 15, 3, 7, blink(t, 6) ? '#9ff' : '#39f');
+    R(x0 + 22, y0 + 22, 5, 3, PAL.skin);
+  }
+}
+function kidSitFloor(x, floor, shirt, t, ph = 0, sc = 2) {
+  spr(KID.concat(KID_LAP), x, floor, { scale: sc, pal: kidPal(shirt), blink: blinking(t, ph) });
+  R(x + 8, floor - 8 + Math.round(Math.sin(t * 4 + ph)), 5, 4, '#ffa300'); R(x + 9, floor - 9 + Math.round(Math.sin(t * 4 + ph)), 3, 1, '#ffd27a');
+}
+function kidAtTable(x, tableY, shirt, t, ph = 0, sc = 2) {
+  const b = Math.round(Math.sin(t * 3 + ph) * .6);
+  spr(KID, x, tableY + b, { scale: sc, pal: kidPal(shirt), blink: blinking(t, ph) });
+}
+function kidStand(x, feet, shirt, sc = 2) { spr(KID.concat(KID_LEGS), x, feet, { scale: sc, pal: kidPal(shirt) }); }
+
+// ============================================================ escenarios
+function stars(col = '#fff', n = 40, yMax = 200) { for (let i = 0; i < n; i++) if (rand(i * 3) > .3) R(rand(i) * W, rand(i + 50) * yMax, 1, 1, col); }
+
+const TV = { x: 179, y: 189, w: 52, h: 37 };
+function livingRoom(t, opt = {}) {
+  R(0, 0, W, H, '#14132a');
+  R(0, 100, W, 170, '#2b2d4f');                        // pared
+  for (let x = 0; x < W; x += 18) R(x, 100, 1, 170, '#27294a');
+  R(0, 270, W, 110, '#4a3b35');                        // piso
+  for (let y = 276; y < 380; y += 8) R(0, y, W, 1, '#3f322d');
+  // ventana
+  R(18, 125, 50, 45, '#6b5a4a'); R(21, 128, 44, 39, '#0b1030');
+  for (let i = 0; i < 8; i++) R(22 + rand(i + 4) * 42, 130 + rand(i + 9) * 35, 1, 1, '#fff');
+  disc(55, 138, 5, '#fff1c1'); R(42, 128, 1, 39, '#6b5a4a'); R(21, 147, 44, 1, '#6b5a4a');
+  // cuadro, planta y repisa
+  R(88, 132, 34, 26, '#6b5a4a'); R(91, 135, 28, 20, '#8fc3e8'); R(91, 148, 28, 7, '#5fa35a'); disc(111, 141, 3, '#ffd23f');
+  R(152, 256, 10, 12, '#8a4b2a'); disc(157, 250, 6, '#2e8b57'); disc(153, 246, 4, '#3fa56a'); disc(161, 245, 4, '#3fa56a');
+  R(210, 150, 34, 3, '#5a3d2b'); R(214, 142, 6, 8, '#c86b85'); R(224, 144, 5, 6, '#ffd23f'); R(232, 141, 7, 9, '#29adff');
+  // lámpara
+  R(8, 205, 2, 65, '#555'); R(2, 196, 14, 10, '#ffcf6b');
+  // mueble y tele
+  R(168, 230, 76, 40, '#5a3d2b'); R(170, 240, 72, 1, '#3e2a1d'); R(170, 254, 72, 1, '#3e2a1d');
+  R(175, 185, 60, 45, '#1a1a1a'); R(TV.x, TV.y, TV.w, TV.h, opt.tvBg || '#15477a');
+  if (!opt.noAnchor) {                                  // conductor del noticiero
+    R(183, 213, 16, 9, '#704020');
+    R(187, 205, 8, 8, '#223');
+    R(188, 199, 6, 6, PAL.skin); R(188, 198, 6, 2, '#222');
+  }
+  R(TV.x, TV.y + TV.h - 7, TV.w, 7, '#c0152f');         // zócalo rojo
+  // luz de la tele sobre la pared
+  w.globalAlpha = .12 + .05 * Math.sin(t * 7); R(150, 150, 110, 120, '#6fb7ff'); w.globalAlpha = 1;
+  // sillón
+  R(40, 222, 100, 22, '#7e2553'); R(40, 242, 100, 16, '#9a3068'); R(34, 232, 8, 30, '#6a1f47'); R(138, 232, 8, 30, '#6a1f47');
+  R(44, 258, 4, 8, '#3e2a1d'); R(132, 258, 4, 8, '#3e2a1d');
+  momSit(88, 258, 1, opt.phone, t);
+  kidSitFloor(150, 290, PAL.kid1, t, 0);
+  kidSitFloor(198, 296, PAL.kid2, t, 2);
+}
+
+function kitchen(t, opt = {}) {
+  const night = opt.night;
+  R(0, 0, W, H, '#14132a');
+  R(0, 100, W, 170, night ? '#1f1c33' : '#3b3552');
+  for (let y = 108; y < 270; y += 12) R(0, y, W, 1, night ? '#1b182d' : '#35304a');
+  R(0, 270, W, 110, night ? '#2a2a33' : '#5b5b66');
+  for (let x = 0; x < W; x += 16) R(x, 270, 1, 110, night ? '#24242c' : '#52525c');
+  // ventana
+  R(150, 125, 55, 42, '#6b5a4a'); R(153, 128, 49, 36, night ? '#0b1030' : '#6fb7ff'); R(177, 128, 1, 36, '#6b5a4a');
+  if (night) disc(165, 138, 4, '#fff1c1');
+  // alacenas y mesada
+  R(70, 112, 70, 28, night ? '#3a2a24' : '#6b4a3a'); R(104, 112, 1, 28, night ? '#2a1e1a' : '#553a2d');
+  R(86, 124, 4, 2, '#caa'); R(118, 124, 4, 2, '#caa');
+  R(66, 206, 50, 5, night ? '#555' : '#9a9aa6'); R(66, 211, 50, 59, night ? '#2e2a3a' : '#4d4860');
+  R(74, 220, 14, 2, '#888'); R(96, 220, 14, 2, '#888');
+  // heladera
+  R(18, 148, 44, 122, '#c2c3c7'); R(18, 190, 44, 1, '#8a8b90'); R(56, 160, 2, 20, '#8a8b90');
+  const open = opt.fridgeOpen || 0;
+  if (open > 0) {
+    R(20, 150, 40, 118, '#fff1e8');                                  // adentro
+    for (const y of [180, 205, 230, 252]) R(20, y, 40, 2, '#c9c1b6');
+    R(28, 245, 5, 7, '#ffcc00');                                     // un solo frasco
+    R(62, 150, Math.round(18 * open), 118, '#a9aab0');               // puerta abierta
+    w.globalAlpha = .25; R(40, 150, 50, 125, '#fff6d0'); w.globalAlpha = 1;
+  }
+  if (opt.beforeTable) opt.beforeTable();
+  // mesa
+  R(120, 232, 140, 5, '#8a5a3c'); R(126, 237, 4, 33, '#6a432b'); R(250, 237, 4, 33, '#6a432b');
+  if (opt.calendar) {
+    R(80, 140, 34, 36, '#fff1e8'); R(80, 140, 34, 8, '#c0152f');
+    for (let i = 0; i < 12; i++) R(83 + (i % 4) * 8, 152 + Math.floor(i / 4) * 7, 5, 4, i < opt.calendar ? '#c0152f' : '#c9c1b6');
+  }
+  if (night) {                                                        // lámpara colgante
+    R(190, 100, 1, 40, '#555'); R(182, 140, 18, 6, '#ffcf6b');
+    w.globalAlpha = .15; R(130, 146, 120, 90, '#ffcf6b'); w.globalAlpha = 1;
+  }
+}
+
+const BLD = { x: 70, y: 112, w: 130, cols: 6, rows: 11 };
+const MOMWIN = { i: 2, j: 7 };
+const winRect = (i, j) => ({ x: BLD.x + 6 + i * 21, y: BLD.y + 8 + j * 18, w: 12, h: 11 });
+function ringFrac(t) { return lerp(.08, .55, seg(t, 1.2, 4)); }
+function sceneCity(t) {
+  R(0, 0, W, H, '#0b1030'); stars('#fff', 60, 330);
+  disc(230, 70, 9, '#fff1c1');
+  const side = [[0, 200, 60, 12], [210, 170, 60, 14], [-10, 250, 40, 8], [245, 230, 40, 8]];
+  for (const [x, y, ww, n] of side) {
+    R(x, y, ww, 400, '#23273d');
+    for (let j = 0; j < n; j++) for (let i = 0; i < Math.floor(ww / 14); i++) {
+      const id = x * 7 + i * 31 + j * 13;
+      const ringing = rand(id) < ringFrac(t);
+      R(x + 4 + i * 14, y + 6 + j * 14, 7, 8, ringing ? (blink(t + rand(id), 4) ? '#ff4d4d' : '#ffec27') : (rand(id + 1) > .5 ? '#ffec27' : '#151a2e'));
+    }
+  }
+  R(BLD.x, BLD.y, BLD.w, 400, '#3a3f58'); R(BLD.x - 4, BLD.y - 4, BLD.w + 8, 6, '#2c3048');
+  for (let j = 0; j < BLD.rows; j++) for (let i = 0; i < BLD.cols; i++) {
+    const r = winRect(i, j), id = i * 11 + j * 7 + 3;
+    const mine = i === MOMWIN.i && j === MOMWIN.j;
+    const ringing = mine || rand(id) < ringFrac(t);
+    R(r.x, r.y, r.w, r.h, ringing ? '#ffec27' : (rand(id + 2) > .55 ? '#e8c547' : '#151a2e'));
+    if (ringing && !mine && blink(t + rand(id), 4)) R(r.x + 4, r.y + 3, 4, 5, '#ff4d4d');
+  }
+  const m = winRect(MOMWIN.i, MOMWIN.j);
+  R(m.x + 3, m.y + 5, 5, 6, PAL.momShirt); R(m.x + 4, m.y + 1, 3, 4, PAL.skin); R(m.x + 3, m.y, 5, 1, PAL.hair);
+  R(m.x + 8, m.y + 3 + (blink(t, 8) ? 1 : 0), 2, 3, '#111');
+  R(0, 380, W, 100, '#10131f');
+  const A = { x: m.x + m.w / 2, y: m.y + m.h / 2, z: 6 };
+  CAM = camLerp(A, VIEW, seg(t, .2, 2));
+}
+function sceneCong(t) {
+  const sky = ['#1d2b53', '#3b3a6e', '#7e4e8a', '#c86b85', '#f19a7a', '#ffcf8a'];
+  sky.forEach((col, i) => R(0, i * 55, W, 55, col)); R(0, 330, W, 150, '#ffcf8a');
+  disc(135, 300, 30 + Math.round(seg(t, 0, 12) * 6), '#fff1c1');
+  const s = '#e6dccb', d = '#cfc3ae', l = '#f4ecdf';
+  R(20, 256, 40, 44, s); R(210, 256, 40, 44, s);
+  R(55, 236, 160, 64, s); R(50, 232, 170, 6, d);
+  for (let i = 0; i < 11; i++) R(60 + i * 14, 244, 6, 50, l);
+  for (let r = 0; r < 26; r++) R(135 - r * 1.6, 206 + r, r * 3.2 + 1, 1, r % 6 === 5 ? d : s);
+  R(110, 176, 50, 30, s); for (let i = 0; i < 5; i++) R(114 + i * 9, 182, 5, 18, '#8b7f6c');
+  for (let dy = 0; dy <= 30; dy++) { const dx = Math.floor(Math.sqrt(30 * 30 - dy * dy)); R(135 - dx, 176 - dy, dx * 2, 1, dy > 22 ? '#8fc2aa' : '#6fa38c'); }
+  R(131, 138, 8, 10, '#6fa38c'); R(134, 128, 2, 10, '#555');
+  R(136, 128, 10, 2, '#75aadb'); R(136, 130, 10, 2, '#fff'); R(136, 132, 10, 2, '#75aadb');
+  for (let i = 0; i < 5; i++) R(30 + i * 4, 300 + i * 4, 210 - i * 8, 4, i % 2 ? '#bfb5a3' : '#cfc6b4');
+  R(0, 320, W, 160, '#6b6258');
+  CAM = { ...VIEW };
+}
+function setFont(size) { ctx.font = `${size}px ${FONT}`; ctx.textBaseline = 'alphabetic'; }
+function outlined(text, x, y, size, color, align = 'center', stroke = 8) {
+  setFont(size); ctx.textAlign = align;
+  ctx.lineJoin = 'round'; ctx.lineWidth = stroke; ctx.strokeStyle = '#000'; ctx.strokeText(text, x, y);
+  ctx.fillStyle = color; ctx.fillText(text, x, y);
+}
+function plain(text, x, y, size, color, align = 'center') { setFont(size); ctx.textAlign = align; ctx.fillStyle = color; ctx.fillText(text, x, y); }
+function richWrap(text, size, maxW) {
+  setFont(size);
+  const sp = ctx.measureText(' ').width;
+  let hi = false; const lines = []; let line = [], lw = 0;
+  for (const word of text.split(' ')) {
+    const parts = []; let cur = '';
+    for (const ch of word) { if (ch === '*') { if (cur) parts.push({ s: cur, hi }); cur = ''; hi = !hi; } else cur += ch; }
+    if (cur) parts.push({ s: cur, hi });
+    const ww = parts.reduce((a, p) => a + ctx.measureText(p.s).width, 0);
+    if (line.length && lw + sp + ww > maxW) { lines.push({ parts: line, w: lw }); line = []; lw = 0; }
+    if (line.length) { line.push({ s: ' ', hi: false }); lw += sp; }
+    line.push(...parts); lw += ww;
+  }
+  if (line.length) lines.push({ parts: line, w: lw });
+  return lines;
+}
+function drawBox(x, y, bw, bh, alpha = 1, border = '#fff') {
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = 'rgba(0,0,0,.9)'; ctx.fillRect(x, y, bw, bh);
+  ctx.strokeStyle = border; ctx.lineWidth = 6; ctx.strokeRect(x + 3, y + 3, bw - 6, bh - 6);
+  ctx.globalAlpha = 1;
+}
+const BOX_Y = 1240;   // cuadro de diálogo, abajo, como en los juegos de rol
+function say(t, t0, t1, text, opt = {}) {
+  if (t < t0 || t > t1) return;
+  const size = opt.size || 38, y = opt.y ?? BOX_Y;
+  const a = win(t, t0, t1, .2);
+  const lines = richWrap(text, size, OW - 200);
+  const lh = size * 1.55, bh = lines.length * lh + size * 1.1;
+  drawBox(60, y, OW - 120, bh, a);
+  setFont(size); ctx.textAlign = 'left'; ctx.globalAlpha = a;
+  let budget = Math.floor((t - t0) * 40);
+  lines.forEach((ln, i) => {
+    let x = OW / 2 - ln.w / 2; const yy = y + size * .55 + i * lh + size;
+    for (const p of ln.parts) {
+      if (budget <= 0) break;
+      const s = p.s.length > budget ? p.s.slice(0, budget) : p.s;
+      budget -= p.s.length;
+      ctx.fillStyle = p.hi ? (opt.hiColor || COL.hi) : '#fff';
+      ctx.fillText(s, x, yy); x += ctx.measureText(p.s).width;
+    }
+  });
+  if (budget > 0 && blink(t, 2)) tri(OW - 120, y + bh - 34, 12, false, '#fff');   // flechita de "seguir"
+  ctx.globalAlpha = 1;
+}
+function tri(x, y, s, up, color) {
+  ctx.fillStyle = color; ctx.beginPath();
+  if (up) { ctx.moveTo(x, y - s); ctx.lineTo(x + s, y + s * .6); ctx.lineTo(x - s, y + s * .6); }
+  else { ctx.moveTo(x, y + s); ctx.lineTo(x + s, y - s * .6); ctx.lineTo(x - s, y - s * .6); }
+  ctx.fill();
+}
+function triSide(x, y, s, right, color) {
+  ctx.fillStyle = color; ctx.beginPath();
+  if (right) { ctx.moveTo(x + s, y); ctx.lineTo(x - s * .7, y - s); ctx.lineTo(x - s * .7, y + s); }
+  else { ctx.moveTo(x - s, y); ctx.lineTo(x + s * .7, y - s); ctx.lineTo(x + s * .7, y + s); }
+  ctx.fill();
+}
+function check(x, y, s, ok) {
+  ctx.lineWidth = s * .28; ctx.lineCap = 'square'; ctx.strokeStyle = ok ? COL.green : COL.red; ctx.beginPath();
+  if (ok) { ctx.moveTo(x - s * .6, y); ctx.lineTo(x - s * .15, y + s * .5); ctx.lineTo(x + s * .7, y - s * .6); }
+  else { ctx.moveTo(x - s * .55, y - s * .55); ctx.lineTo(x + s * .55, y + s * .55); ctx.moveTo(x + s * .55, y - s * .55); ctx.lineTo(x - s * .55, y + s * .55); }
+  ctx.stroke(); ctx.lineCap = 'butt';
+}
+
+// ---- la tele
+function tvNews(t) {
+  const r = rectS(TV), k = r.w / 624;
+  ctx.save(); ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
+  ctx.fillStyle = '#c0152f'; ctx.fillRect(r.x + 14 * k, r.y + 14 * k, 150 * k, 40 * k);
+  plain('EN VIVO', r.x + 89 * k, r.y + 44 * k, 20 * k, '#fff');
+  const after = t >= 1.2;
+  plain(after ? '12,8%' : '12,9%', r.x + r.w * .63, r.y + r.h * .55, 92 * k, after ? COL.green : '#fff');
+  if (after) { tri(r.x + r.w * .63, r.y + r.h * .66, 16 * k, false, COL.green); }
+  plain('BAJÓ LA MORA', r.x + r.w / 2, r.y + r.h - 22 * k, 38 * k, '#fff');
+  ctx.restore();
+}
+function achievement(t, t0, t1, title, text) {
+  if (t < t0 || t > t1) return;
+  const y = lerp(-180, 290, seg(t, t0, t0 + .35)) - (1 - (1 - seg(t, t1 - .35, t1))) * 470;
+  drawBox(90, y, OW - 180, 140, 1, COL.hi);
+  // copa
+  const cx = 175, cy = y + 70, u = 7;
+  ctx.fillStyle = COL.hi;
+  ctx.fillRect(cx - 5 * u, cy - 6 * u, 10 * u, 2 * u); ctx.fillRect(cx - 4 * u, cy - 4 * u, 8 * u, 4 * u);
+  ctx.fillRect(cx - 2 * u, cy, 4 * u, 2 * u); ctx.fillRect(cx - u, cy + 2 * u, 2 * u, 2 * u); ctx.fillRect(cx - 3 * u, cy + 4 * u, 6 * u, 2 * u);
+  ctx.fillRect(cx - 7 * u, cy - 6 * u, 2 * u, 3 * u); ctx.fillRect(cx + 5 * u, cy - 6 * u, 2 * u, 3 * u);
+  plain(title, 250, y + 58, 22, COL.hi, 'left');
+  plain(text, 250, y + 108, 34, '#fff', 'left');
+}
+function legajo(t) {
+  const t0 = .1; if (t < t0) return;
+  ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(0, 0, OW, OH);
+  const y = lerp(OH, 480, seg(t, t0, t0 + .35));
+  ctx.fillStyle = '#d9b77a'; ctx.fillRect(200, y - 30, 260, 40); ctx.fillRect(200, y, 680, 580);
+  ctx.fillStyle = '#c29f62'; ctx.fillRect(200, y + 560, 680, 20);
+  plain('LEGAJO DEUDORA', 540, y + 70, 30, '#5a4020');
+  plain('TARJETA DEL BANCO', 540, y + 110, 20, '#7a5a30');
+  ctx.fillStyle = '#fff1e8'; ctx.fillRect(250, y + 140, 160, 190);
+  ctx.save(); ctx.beginPath(); ctx.rect(250, y + 140, 160, 190); ctx.clip();
+  spr(MOM_HEAD.concat(MOM_TORSO.slice(0, 4)), 330, y + 330, { ctx, scale: 11 });
+  ctx.restore();
+  for (let i = 0; i < 5; i++) { ctx.fillStyle = '#b89a66'; ctx.fillRect(450, y + 160 + i * 36, 380 - i * 30, 12); }
+  if (t > t0 + .6) {
+    const k = seg(t, t0 + .6, t0 + .75), sc = lerp(2.2, 1, k);
+    ctx.save(); ctx.translate(540, y + 430); ctx.rotate(-.18); ctx.scale(sc, sc); ctx.globalAlpha = k;
+    ctx.strokeStyle = '#d0102f'; ctx.lineWidth = 10; ctx.strokeRect(-330, -58, 660, 116);
+    plain('IRRECUPERABLE', 0, 20, 46, '#d0102f');
+    ctx.restore(); ctx.globalAlpha = 1;
+  }
+}
+
+// ---- pantalla de inicio del juego
+function scanlines() { ctx.fillStyle = 'rgba(0,0,0,.13)'; for (let y = 0; y < OH; y += 8) ctx.fillRect(0, y, OW, 3); }
+// ============================================================ música (temas de 8 bits)
+const midi = n => 440 * Math.pow(2, (n - 69) / 12);
+const _ = null;
+const SONGS = {
+  title: { bpm: 150, lead: [72, _, 76, 79, 84, _, 79, 76, 77, _, 81, 84, 83, _, 79, _], bass: [48, _, 48, _, 43, _, 43, _, 41, _, 41, _, 43, _, 43, _], drum: 'k.h.s.h.k.h.s.hh' },
+  home:  { bpm: 104, lead: [69, _, 72, _, 76, _, 74, 72, 71, _, 72, _, 69, _, _, _, 65, _, 69, _, 72, _, 71, 69, 67, _, 64, _, 67, _, _, _],
+           bass: [45, _, _, _, 52, _, _, _, 45, _, _, _, 52, _, _, _, 41, _, _, _, 48, _, _, _, 43, _, _, _, 50, _, _, _], drum: 'h.......h.......' },
+  shop:  { bpm: 144, lead: [77, 81, 84, _, 81, _, 84, 89, 79, 82, 86, _, 82, _, 86, 91], bass: [41, _, 53, _, 41, _, 53, _, 43, _, 55, _, 43, _, 55, _], drum: 'k.hsk.hsk.hsk.hs' },
+  tense: { bpm: 156, lead: [74, _, 74, 77, _, 74, 72, _, 74, _, 74, 79, _, 77, 76, _], bass: [38, 38, 50, 38, 38, 50, 38, 50, 36, 36, 48, 36, 36, 48, 36, 48], drum: 'k.h.k.hsk.h.khsh' },
+  mora:  { bpm: 76, lead: [57, _, _, _, _, _, 55, _, 56, _, _, _, _, _, _, _], bass: [33, _, _, _, 33, _, _, _, 32, _, _, _, 32, _, _, _], drum: 'k.k.....k.k.....' },
+  news:  { bpm: 120, lead: [71, _, 74, _, 78, _, 76, _, 74, _, 71, _, 69, _, _, _], bass: [47, _, 47, _, 43, _, 43, _, 45, _, 45, _, 42, _, 42, _], drum: 'h.h.h.h.h.h.h.h.' },
+  city:  { bpm: 128, lead: [69, 72, 76, 72, 69, 72, 76, 72, 65, 69, 72, 69, 65, 69, 72, 69, 67, 71, 74, 71, 67, 71, 74, 71, 64, 68, 71, 68, 64, 68, 71, 68],
+           bass: [45, _, _, _, 45, _, _, _, 41, _, _, _, 41, _, _, _, 43, _, _, _, 43, _, _, _, 40, _, _, _, 40, _, _, _], drum: 'k...s...k...s.s.' },
+  hope:  { bpm: 112, lead: [72, _, 76, _, 79, _, _, 77, 76, _, 74, _, 72, _, _, _, 77, _, 81, _, 84, _, _, 81, 79, _, _, _, _, _, _, _],
+           bass: [48, _, 55, _, 48, _, 55, _, 53, _, 60, _, 53, _, 60, _, 41, _, 48, _, 41, _, 48, _, 43, _, 50, _, 43, _, 50, _], drum: 'k.h.s.h.k.h.s.hs' }
+};
+// [desde, hasta, tema] en segundos de video
+SONGS.title.arp = [60, 64, 67, 72, 60, 64, 67, 72, 57, 60, 65, 69, 59, 62, 67, 71];
+SONGS.shop.arp = [65, 69, 72, 77, 65, 69, 72, 77, 67, 70, 74, 79, 67, 70, 74, 79];
+SONGS.tense.arp = [62, 65, 69, 65, 62, 65, 69, 65, 60, 64, 67, 64, 60, 64, 67, 64];
+SONGS.hope.arp = [60, 64, 67, 64, 60, 64, 67, 64, 65, 69, 72, 69, 67, 71, 74, 71];
+function leadNote(f, d) {
+  const t0 = now0(), o = AC.createOscillator(), g = AC.createGain();
+  o.type = 'square'; o.frequency.setValueAtTime(f, t0);
+  g.gain.setValueAtTime(.28, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + d);
+  o.connect(g); g.connect(musicGain); o.start(t0); o.stop(t0 + d + .02);
+}
+function bassNote(f, d = .38) {
+  const t0 = now0(), o = AC.createOscillator(), g = AC.createGain();
+  o.type = 'triangle'; o.frequency.setValueAtTime(f, t0);
+  g.gain.setValueAtTime(.9, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + d);
+  o.connect(g); g.connect(musicGain); o.start(t0); o.stop(t0 + d + .02);
+}
+function drum(k) {
+  const t0 = now0();
+  if (k === 'k') { const o = AC.createOscillator(), g = AC.createGain(); o.frequency.setValueAtTime(150, t0); o.frequency.exponentialRampToValueAtTime(45, t0 + .12);
+    g.gain.setValueAtTime(1, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + .15); o.connect(g); g.connect(musicGain); o.start(t0); o.stop(t0 + .16); return; }
+  const d = k === 's' ? .12 : .04, n = Math.floor(AC.sampleRate * d), b = AC.createBuffer(1, n, AC.sampleRate), ch = b.getChannelData(0);
+  for (let i = 0; i < n; i++) ch[i] = Math.random() * 2 - 1;
+  const src = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain();
+  src.buffer = b; f.type = k === 's' ? 'bandpass' : 'highpass'; f.frequency.value = k === 's' ? 1800 : 7000;
+  g.gain.setValueAtTime(k === 's' ? .5 : .25, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + d);
+  src.connect(f); f.connect(g); g.connect(musicGain); src.start(t0);
+}
+function tone(f, d, type = 'square', vol = .3, when = 0, slide = null) {
+  const t0 = now0() + when, o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, t0);
+  if (slide) o.frequency.exponentialRampToValueAtTime(slide, t0 + d);
+  g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + d);
+  o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + d + .03);
+}
+function noise(d, vol, when = 0, freq = 1200) {
+  const n = Math.floor(AC.sampleRate * d), b = AC.createBuffer(1, n, AC.sampleRate), ch = b.getChannelData(0);
+  for (let i = 0; i < n; i++) ch[i] = Math.random() * 2 - 1;
+  const s = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain(), t0 = now0() + when;
+  s.buffer = b; f.type = 'lowpass'; f.frequency.value = freq;
+  g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + d);
+  s.connect(f); f.connect(g); g.connect(master); s.start(t0);
+}
+const SFX = {
+  logro()  { [659, 880, 1175, 1568].forEach((f, i) => tone(f, .12, 'square', .22, i * .07)); tone(1568, .5, 'triangle', .25, .3); },
+  title()  { [392, 523, 659, 784, 1047].forEach((f, i) => tone(f, .14, 'square', .2, i * .11)); tone(784, .5, 'triangle', .2, .6); },
+  ring()   { for (let i = 0; i < 8; i++) tone(i % 2 ? 1500 : 1250, .05, 'square', .12, i * .06); },
+  door()   { tone(120, .25, 'triangle', .3, 0, 80); },
+  menu()   { tone(660, .06, 'square', .2); },
+  select() { tone(880, .07, 'square', .25); tone(1320, .12, 'square', .25, .08); },
+  buzz()   { tone(110, .3, 'square', .3); tone(104, .3, 'square', .3); },
+  coin()   { tone(988, .07, 'square', .25); tone(1319, .3, 'square', .25, .07); },
+  inflate(){ tone(200, 5.5, 'sine', .22, 0, 700); for (let i = 0; i < 11; i++) noise(.08, .08, i * .5, 800); },
+  stamp()  { noise(.3, .6, 0, 300); tone(70, .3, 'square', .4); },
+  tick()   { tone(1500, .03, 'square', .1); },
+  cut()    { tone(300, .06, 'square', .15); },
+  hope()   { [523, 659, 784].forEach(f => tone(f, 1.6, 'triangle', .18)); tone(1047, 1.6, 'triangle', .12, .5); },
+  end()    { [523, 659, 784, 1047].forEach((f, i) => tone(f, .16, 'square', .2, i * .12)); }
+};
+
+// ============================================================ vista del juego
+// La ilustración ocupa la parte de arriba; abajo va el cuadro de texto con las opciones.
+const VIEW = { x: 135, y: 205, z: 1.07 };
+const VIEW_DY = -220;
+let CAM = { ...VIEW };
+const toS = (x, y) => ({ x: (x - CAM.x) * 4 * CAM.z + OW / 2, y: (y - CAM.y) * 4 * CAM.z + OH / 2 + VIEW_DY });
+function rectS(r) { const a = toS(r.x, r.y), s = 4 * CAM.z; return { x: a.x, y: a.y, w: r.w * s, h: r.h * s }; }
+function camLerp(A, B, k) { return { x: lerp(A.x, B.x, k), y: lerp(A.y, B.y, k), z: lerp(A.z, B.z, k) }; }
+const BOX_TOP = 1220, BOX_BOTTOM = 1900;
+
+// ============================================================ mundos (lo que se dibuja arriba)
+const TV_CAM = { x: TV.x + TV.w / 2, y: TV.y + TV.h / 2, z: 3.6 };
+const TYCOON = [
+  "....kkkkkkkk....",
+  "....kkkkkkkk....",
+  "....kkkkkkkk....",
+  "....kyyyyyyk....",
+  "..kkkkkkkkkkkk..",
+  ".....ssssss.....",
+  "....ssssssss....",
+  "....swesswes....",
+  "....ssssssss....",
+  "....sssSSsss....",
+  "....sbbbbbbs....",
+  "....sssmmsss....",
+  ".....ssssss.....",
+  "......ssss......",
+  "...kkkwyywkkk...",
+  "..kkkkwyywkkkk..",
+  "..kkkkkyykkkkk..",
+  "..kkkkkyykkkkk..",
+  "..kkkykkkkkkkk..",
+  "..kkkkykkkkkkk..",
+  "..kkkkkkkkkkkk..",
+  "..sskkkkkkkkss..",
+  "....kkkkkkkk....",
+  "....kkkk.kkkk...",
+  "....kkkk.kkkk...",
+  "....kkkk.kkkk...",
+  "....kkkk.kkkk...",
+  "....kkkk.kkkk...",
+  "....kkkk.kkkk...",
+  "...xxxxx.xxxxx..",
+  "...xxxxx.xxxxx.."];
+const TYCOON_PAL = { k: '#23233d', y: '#ffd23f', x: '#000', b: '#8a8a8a', h: '#8a8a8a' };
+
+function wStars(lt) {
+  R(0, 0, W, H, '#07071a');
+  for (let i = 0; i < 90; i++) if (rand(i * 3) > .3) R(rand(i) * W, rand(i + 50) * 480, 1, 1, blink(lt + rand(i) * 3, 1.3) ? '#fff' : '#8888aa');
+}
+function wTitle(lt) {
+  wStars(lt);
+  R(40, 300, 190, 2, '#3b4bff');
+  momStand(106, 300, 1, false, lt, 3);
+  kidStand(146, 300, PAL.kid1, 3);
+  kidStand(174, 300, PAL.kid2, 3);
+  CAM = { ...VIEW };
+}
+function wSelect(lt) {
+  wStars(lt);
+  const hov = selectedTxt();
+  [[78, 'MULTIMILLONARIO'], [192, 'TRABAJADORA']].forEach(([x, name]) => {
+    R(x - 32, 300, 64, 6, hov === name ? '#ffe135' : '#3b4bff'); R(x - 28, 306, 56, 40, '#141433');
+  });
+  spr(TYCOON, 78, 300, { scale: 3, pal: TYCOON_PAL, blink: blinking(lt) });
+  disc(112, 290, 9, '#c8a24a'); R(108, 279, 8, 4, '#a8842a'); R(110, 286, 4, 7, '#7a5a10');   // bolsa de plata
+  momStand(192, 300, -1, false, lt, 3);
+  CAM = { ...VIEW };
+}
+function wCasa(lt) { livingRoom(lt, {}); CAM = { ...VIEW }; }
+function wCocina(lt, full = false) {
+  kitchen(lt, { fridgeOpen: full ? 1 : seg(lt, .3, .9) });
+  if (full) {
+    for (const [x, y, a, b, col] of [[24, 168, 8, 11, '#e8412c'], [35, 171, 10, 8, '#f5d142'], [48, 167, 6, 12, '#fff'], [24, 193, 14, 8, '#8bc34a'],
+      [42, 194, 12, 7, '#ff9800'], [25, 216, 10, 11, '#8d5a3b'], [40, 219, 14, 8, '#e91e63'], [24, 241, 26, 9, '#90caf9']]) R(x, y, a, b, col);
+  }
+  momStand(92, 270, -1, !full && lt > .5, lt);
+  kidAtTable(172, 234, PAL.kid1, lt, 0); kidAtTable(228, 234, PAL.kid2, lt, 1.5);
+  R(160, 229, 22, 3, '#fff'); R(216, 229, 22, 3, '#fff');
+  if (full) { disc(171, 227, 3, '#f5d142'); disc(227, 227, 3, '#e8412c'); }
+  CAM = { ...VIEW };
+}
+const PHONE = { x: 60, y: 120, w: 100, h: 190 };
+const SCREEN = { x: 67, y: 132, w: 86, h: 166 };
+const BALLOON = { x: 214, y: 176 };
+function wPhone(lt, balloon = false) {
+  R(0, 0, W, H, '#1a1030');
+  for (let i = 0; i < 12; i++) { w.globalAlpha = .08; disc(rand(i) * W, 100 + rand(i + 3) * 280, 20 + rand(i + 7) * 30, i % 2 ? '#ffe600' : '#ff7a00'); }
+  w.globalAlpha = 1;
+  R(PHONE.x, PHONE.y, PHONE.w, PHONE.h, '#111'); R(SCREEN.x, SCREEN.y, SCREEN.w, SCREEN.h, '#f4f4f4');
+  R(PHONE.x + 43, PHONE.y + 5, 14, 2, '#333');
+  R(PHONE.x - 9, 242, 12, 70, PAL.skin); R(PHONE.x + PHONE.w - 3, 232, 12, 80, PAL.skin);
+  if (balloon) {
+    const r = balloonR(lt), cy = BALLOON.y + Math.round(Math.sin(lt * 3) * 1.5);
+    const x0 = BALLOON.x, y0 = cy + r + 3, x1 = PHONE.x + PHONE.w, y1 = PHONE.y + 40;
+    for (let i = 0; i <= 20; i++) R(lerp(x0, x1, i / 20), lerp(y0, y1, i / 20), 1, 1, '#ddd');
+    disc(BALLOON.x, cy, r, '#e0103f'); disc(BALLOON.x - r * .35, cy - r * .35, Math.max(1, Math.round(r * .2)), '#ff6f8f');
+    R(BALLOON.x - 2, cy + r, 5, 3, '#e0103f');
+  }
+  CAM = { ...VIEW };
+}
+const balloonR = lt => Math.round(lerp(6, 34, seg(lt, .4, 4.5)));
+function wMora(lt) {
+  kitchen(lt, { night: true, calendar: 9, beforeTable: () => momSit(160, 252, 1, false, lt) });
+  R(172, 229, 14, 3, '#fff1e8'); R(188, 228, 12, 4, '#fff1e8'); R(176, 226, 12, 3, '#e8e0d0');
+  const ringing = G.id === 'mora' && (lt % 2.4) < 1.5;
+  const sh = ringing ? Math.round(Math.sin(lt * 60)) : 0;
+  R(212 + sh, 227, 9, 5, '#111'); R(213 + sh, 228, 7, 3, ringing && blink(lt, 8) ? '#9ff' : '#335');
+  CAM = { ...VIEW };
+}
+function wTV(lt, checkMode) {
+  livingRoom(lt, { phone: true, noAnchor: checkMode, tvBg: checkMode ? '#0e2340' : undefined });
+  CAM = { ...TV_CAM };
+}
+
+// ============================================================ capas en alta resolución
+function phoneScreen(mode, lt) {
+  const r = rectS(SCREEN), k = r.w / 232;
+  const X = u => r.x + u * k, Y = u => r.y + u * k, U = u => u * k;
+  ctx.save(); ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
+  const header = (bg, fg, name) => { ctx.fillStyle = bg; ctx.fillRect(r.x, r.y, r.w, U(70)); plain(name, X(116), Y(46), U(17), fg); };
+  const approved = (l1, l2) => {
+    plain('¡APROBADO!', X(116), Y(150), U(20), '#2e9e6a');
+    check(X(116), Y(230), U(60), true);
+    plain(l1, X(116), Y(330), U(14), '#333'); plain(l2, X(116), Y(360), U(14), '#333');
+  };
+  if (mode === 'pagos') {
+    plain('CONSEGUIR PLATA', X(116), Y(40), U(13), '#333');
+    const tiles = [['TARJETA DEL BANCO', '#8a8f9c', '#fff'], ['PRÉSTAMO DEL BANCO', '#8a8f9c', '#fff'], ['UN FAMILIAR', '#6b7fa8', '#fff']];
+    if (visibleOpts(SCREENS.pagar).length > 3) tiles.push(['MERCADO LIBRE', COL.ml, COL.mlText]);
+    tiles.forEach(([name, bg, fg], i) => {
+      const yy = 62 + i * 94, no = G.tried.has('pagar:' + SCREENS.pagar.opts[i].txt) && i < 3;
+      ctx.fillStyle = no ? '#c9c9d1' : bg; ctx.fillRect(X(14), Y(yy), U(204), U(80));
+      plain(name, X(116), Y(yy + 46), U(name.length > 14 ? 12 : 14), no ? '#888' : fg);
+      if (no) { ctx.save(); ctx.translate(X(116), Y(yy + 42)); ctx.rotate(-.12); ctx.strokeStyle = '#d0102f'; ctx.lineWidth = U(4); ctx.strokeRect(-U(80), -U(18), U(160), U(34)); plain('RECHAZADO', 0, U(8), U(14), '#d0102f'); ctx.restore(); }
+    });
+  } else if (mode === 'tasas') {
+    header(COL.ml, COL.mlText, 'MERCADO LIBRE');
+    plain('ELEGÍ TU TASA', X(116), Y(110), U(15), '#333');
+    SCREENS.tasa.opts.forEach((o, i) => {
+      const yy = 140 + i * 72, no = G.tried.has('tasa:' + o.txt);
+      ctx.fillStyle = no ? '#ddd' : (i === 3 ? '#3483fa' : '#e8f0ff'); ctx.fillRect(X(20), Y(yy), U(192), U(58));
+      plain(o.txt, X(116), Y(yy + 38), U(22), no ? '#999' : (i === 3 ? '#fff' : '#3483fa'));
+      if (no) { ctx.fillStyle = '#d0102f'; ctx.fillRect(X(24), Y(yy + 28), U(184), U(4)); }
+    });
+  } else if (mode === 'ml_ok') {
+    header(COL.ml, COL.mlText, 'MERCADO LIBRE'); approved('Te depositamos', 'hoy mismo');
+  } else if (mode === 'cuota') {
+    header(COL.ml, COL.mlText, 'MERCADO LIBRE');
+    plain('CUOTA 1 DE 12', X(116), Y(112), U(15), '#333');
+    if (blink(lt, 2)) plain('VENCE HOY', X(116), Y(148), U(16), '#e0103f');
+    plain('PEDISTE', X(20), Y(206), U(13), '#333', 'left');
+    ctx.fillStyle = '#2e9e6a'; ctx.fillRect(X(20), Y(218), U(60), U(30));
+    plain('VAS A DEVOLVER', X(20), Y(290), U(13), '#333', 'left');
+    const g = seg(lt, .4, 4.5), rows = 1 + Math.min(3, Math.floor(g * 4));
+    for (let j = 0; j < rows; j++) {
+      const frac = g >= 1 ? 1 : (g * 4) % 1;
+      ctx.fillStyle = '#e0103f'; ctx.fillRect(X(20), Y(302 + j * 36), U(j === rows - 1 ? lerp(60, 192, frac) : 192), U(30));
+    }
+  } else if (mode === 'nar_ok') {
+    header(COL.nar, '#fff', 'NARANJA'); approved('Para pagar', 'tu otra cuota');
+  } else if (mode === 'cuota2') {
+    const box = (y, bg, fg, name) => {
+      ctx.fillStyle = bg; ctx.fillRect(r.x, Y(y), r.w, U(50)); plain(name, X(116), Y(y + 34), U(15), fg);
+      plain('CUOTA', X(20), Y(y + 90), U(14), '#333', 'left');
+      if (blink(lt, 2)) plain('VENCE HOY', X(212), Y(y + 90), U(14), '#e0103f', 'right');
+    };
+    box(0, COL.ml, COL.mlText, 'MERCADO LIBRE'); box(120, COL.nar, '#fff', 'NARANJA');
+    plain('CUOTAS', X(20), Y(290), U(13), '#333', 'left');
+    ctx.fillStyle = '#e0103f'; ctx.fillRect(X(20), Y(302), U(192), U(30));
+    plain('SUELDO', X(20), Y(370), U(13), '#333', 'left');
+    ctx.fillStyle = '#6fb7ff'; ctx.fillRect(X(20), Y(382), U(140), U(30));
+  }
+  ctx.restore();
+  if (mode === 'cuota' && balloonR(lt) >= 17) {
+    const rr = balloonR(lt), s = toS(BALLOON.x, BALLOON.y + Math.round(Math.sin(lt * 3) * 1.5));
+    const fs = Math.max(10, rr * 4 * CAM.z * .17);
+    outlined('INTERESES', s.x, s.y + fs * .4, fs, '#fff', 'center', 6);
+  }
+  if ((mode === 'ml_ok' || mode === 'nar_ok') && lt < .9) outlined('+$', r.x + r.w + 80, r.y + r.h * .4 - lt * 140, 50, COL.green);
+}
+const CALLERS = ['COBRANZAS', 'NÚMERO DESCONOCIDO', 'ESTUDIO JURÍDICO', 'ÚLTIMO AVISO'];
+function callerId(lt) {
+  if ((lt % 2.4) >= 1.5) return;
+  const who = CALLERS[Math.floor(lt / 2.4) % CALLERS.length], s = toS(216, 222);
+  drawBox(s.x - 380, s.y - 200, 460, 115, 1, COL.red);
+  plain('LLAMADA ENTRANTE', s.x - 150, s.y - 152, 16, COL.mut);
+  plain(who, s.x - 150, s.y - 114, who.length > 12 ? 18 : 26, '#fff');
+  if (blink(lt, 4)) outlined('RING!', s.x + 10, s.y - 36, 32, COL.red);
+}
+function tvCheck(lt) {
+  const r = rectS(TV), k = r.w / 624;
+  ctx.save(); ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
+  plain('MORA 12,8%', r.x + r.w / 2, r.y + 58 * k, 40 * k, COL.green);
+  plain('¿A QUIÉN CUENTA?', r.x + r.w / 2, r.y + 104 * k, 24 * k, COL.hi);
+  [['BANCOS', true], ['MERCADO LIBRE', false], ['NARANJA', false], ['DADOS POR PERDIDOS', false]].forEach(([txt, ok], i) => {
+    if (lt < .8 + i * .7) return;
+    const yy = r.y + (170 + i * 58) * k;
+    plain(txt, r.x + 50 * k, yy, 22 * k, ok ? '#fff' : '#ffb0b0', 'left');
+    check(r.x + r.w - 50 * k, yy - 10 * k, 28 * k, ok);
+  });
+  ctx.restore();
+}
+function cityCounters(lt) {
+  const a = seg(lt, 1.2, 1.6); if (a <= 0) return;
+  const k = seg(lt, 1.6, 3.4);
+  ctx.globalAlpha = a;
+  ctx.fillStyle = 'rgba(0,0,0,.85)'; ctx.fillRect(30, 20, 900, 250);
+  ctx.strokeStyle = COL.red; ctx.lineWidth = 5; ctx.strokeRect(32, 22, 896, 246);
+  plain('PERSONAS EN MORA', 90, 88, 24, '#fff', 'left');
+  plain(fmtInt(lerp(DATA.personasJul, DATA.personasAgo, k)), 90, 152, 52, COL.red, 'left');
+  if (k >= 1) tri(680, 134, 22, true, COL.red);
+  plain('DEUDA EN MORA', 90, 214, 24, '#fff', 'left');
+  plain(fmtPct(lerp(DATA.deudaJul, DATA.deudaAgo, k)), 500, 216, 34, COL.red, 'left');
+  if (k >= 1) tri(720, 204, 16, true, COL.red);
+  plain('JUL > AGO 2026', 900, 88, 18, COL.mut, 'right');
+  plain('sobre toda la deuda de las personas', 480, 252, 16, COL.mut);
+  ctx.globalAlpha = 1;
+}
+function bigTitle(sub) {
+  outlined('FIN DE MES', OW / 2, 250, 92, COL.hi, 'center', 14);
+  if (sub) sub.forEach((l, i) => plain(l, OW / 2, 330 + i * 40, 22, '#fff'));
+}
+
+// ============================================================ pantallas
+// Cada opción puede: ir a otra pantalla (go), fallar con un mensaje (fail: se agota),
+// estar negada (deny: se pone gris con una nota) o mostrar un mensaje (msg).
+// Las opciones "hidden" aparecen cuando se agotaron todas las demás.
+const HAMBRE = 'No saciaste el hambre. ¿Cómo seguimos?';
+const SCREENS = {
+  title: {
+    world: wTitle, song: 'title', hud: null, over: () => bigTitle(),
+    text: 'Un juego que juegan millones de personas todos los meses.',
+    opts: [{ txt: 'JUGAR', go: 'personaje' }]
+  },
+  personaje: {
+    world: wSelect, song: 'title', hud: null,
+    over: () => {
+      outlined('ELEGÍ TU PERSONAJE', OW / 2, 250, 44, COL.hi, 'center', 10);
+      const a = toS(78, 356), b = toS(192, 356);
+      plain('MULTIMILLONARIO', a.x, a.y, 18, '#fff'); plain('TRABAJADORA', b.x, b.y, 18, '#fff');
+    },
+    text: 'Elegí tu personaje.',
+    opts: [{ txt: 'MULTIMILLONARIO', msg: 'Mala suerte: los cupos para multimillonario están *ocupados*. Sos *trabajadora*.', go: 'casa' },
+      { txt: 'TRABAJADORA', go: 'casa' }]
+  },
+  casa: {
+    world: wCasa, song: 'home', day: 'MES 1 - DÍA 15', hud: { hel: 1, sue: 0, deu: 0 },
+    text: 'Trabajás todo el día, pero el sueldo se terminó hace una semana. Tus hijos tienen *hambre*.',
+    opts: [{ txt: 'SEGUIR', go: 'comida' }]
+  },
+  comida: {
+    world: lt => wCocina(lt), song: 'home', day: 'MES 1 - DÍA 15', hud: { hel: 0, sue: 0, deu: 0 },
+    text: 'La heladera está *vacía*. ¿Qué les das de comer?',
+    opts: [
+      { txt: 'Explicarles que hay que dejar de comer para sostener el superávit fiscal', fail: 'Muy patriótico. ' + HAMBRE },
+      { txt: 'Recordarles que les hicieron creer que tenían derecho a comer tres veces por día', fail: 'Ahora lo saben. ' + HAMBRE },
+      { txt: 'Esperar a que derrame', fail: 'Esperaron. No derramó nada. ' + HAMBRE },
+      { txt: 'Un vaso de agua y a dormir temprano', fail: 'A la mañana se despiertan con más hambre. ' + HAMBRE },
+      { txt: 'PEDIR PLATA PRESTADA', go: 'pagar', hidden: true }]
+  },
+  pagar: {
+    world: lt => wPhone(lt), over: lt => phoneScreen('pagos', lt), song: 'shop', day: 'MES 1 - DÍA 15', hud: { hel: 0, sue: 0, deu: 0 },
+    text: 'Hay que conseguir plata. ¿De dónde la sacás?',
+    opts: [
+      { txt: 'TARJETA DEL BANCO', deny: 'Rechazada: límite agotado.' },
+      { txt: 'PRÉSTAMO DEL BANCO', deny: 'No calificás: tenés la tarjeta atrasada.' },
+      { txt: 'PEDIRLE A UN FAMILIAR', deny: 'Está igual que vos.' },
+      { txt: 'MERCADO LIBRE: PLATA EN UN CLIC', go: 'tasa', hidden: true }]
+  },
+  tasa: {
+    world: lt => wPhone(lt), over: lt => phoneScreen('tasas', lt), song: 'shop', day: 'MES 1 - DÍA 15', hud: { hel: 0, sue: 0, deu: 0 },
+    text: 'Mercado Libre te presta *hoy mismo*. Elegí tu tasa de interés anual:',
+    opts: [
+      { txt: '15%', deny: 'No disponible para vos.' },
+      { txt: '50%', deny: 'No disponible para vos.' },
+      { txt: '70%', deny: 'No disponible para vos.' },
+      { txt: '150%', go: 'aprobado' }]
+  },
+  aprobado: {
+    world: lt => wCocina(lt, true), song: 'shop', day: 'MES 1 - DÍA 15', hud: { hel: 8, sue: 0, deu: 4 }, enter: () => SFX.coin(),
+    text: '¡Aprobado! La plata llegó en un minuto. Los chicos comieron. *Por ahora.*',
+    opts: [{ txt: 'SEGUIR', go: 'cuota' }]
+  },
+  cuota: {
+    world: lt => wPhone(lt, true), over: lt => phoneScreen('cuota', lt), song: 'tense', day: 'MES 2 - DÍA 1', hud: { hel: 3, sue: 3, deu: 5 },
+    enter: () => SFX.inflate(),
+    text: 'Cobraste. Y llegó la primera cuota: con una tasa del 150%, se lleva *medio sueldo*.',
+    opts: [{ txt: 'PAGAR LA CUOTA', go: 'dia12' },
+      { txt: 'COMPRAR COMIDA', msg: 'Los chicos comen. La cuota queda sin pagar y empiezan a correr los *intereses por mora*.', go: 'mora' }]
+  },
+  dia12: {
+    world: lt => wCocina(lt), song: 'home', day: 'MES 2 - DÍA 12', hud: { hel: 0, sue: 0, deu: 5 },
+    text: 'Pagaste la cuota. Lo que quedó alcanzó para diez días. La heladera, *vacía* otra vez.',
+    opts: [
+      { txt: 'Ajustarse el cinturón', fail: 'Ya no le quedan agujeros. No alcanzó. ¿Cómo seguimos?' },
+      { txt: 'Estirar un paquete de fideos toda la semana', fail: 'Llegó hasta el martes. No alcanzó. ¿Cómo seguimos?' },
+      { txt: 'Conseguir otro trabajo', fail: 'Ya tenés dos. No alcanzó. ¿Cómo seguimos?' },
+      { txt: 'NARANJA: PRÉSTAMO PARA PAGAR TU CUOTA', go: 'naranja', hidden: true }]
+  },
+  naranja: {
+    world: lt => wPhone(lt), over: lt => phoneScreen('nar_ok', lt), song: 'shop', day: 'MES 2 - DÍA 12', hud: { hel: 6, sue: 0, deu: 8 },
+    enter: () => SFX.coin(),
+    text: '¡Aprobado! Naranja te presta para pagar lo de Mercado Libre. Ahora tenés dos deudas, y una sirve para pagar la otra: es la *bola de nieve*.',
+    opts: [{ txt: 'SEGUIR', go: 'cuota2' }]
+  },
+  cuota2: {
+    world: lt => wPhone(lt), over: lt => phoneScreen('cuota2', lt), song: 'tense', day: 'MES 3 - DÍA 1', hud: { hel: 3, sue: 3, deu: 10 },
+    text: 'Cobraste. Llegaron las dos cuotas: juntas son *más que tu sueldo*. ¿Qué pagás?',
+    opts: [
+      { txt: 'LAS DOS CUOTAS', deny: 'No te alcanza el sueldo.' },
+      { txt: 'UNA CUOTA Y NADA DE COMIDA', fail: 'Tus hijos no pueden pasar un mes sin comer. ¿Cómo seguimos?' },
+      { txt: 'LA COMIDA', go: 'mora' }]
+  },
+  mora: {
+    world: wMora, over: callerId, song: 'mora', day: 'MES 4', hud: { hel: 3, sue: 0, deu: 10 }, mora: true,
+    text: 'Dejaste de pagar: estás *en mora*. Empiezan los llamados, todos los días y a cualquier hora. ¿Qué hacés?',
+    opts: [
+      { txt: 'ATENDER', msg: '"Si no regulariza hoy, su deuda pasa a otra instancia." Cortan. Vuelven a llamar en una hora.' },
+      { txt: 'NO ATENDER', msg: 'Suena otra vez. Y otra. Y otra.' },
+      { txt: 'APAGAR EL CELULAR', msg: 'No podés: lo necesitás para trabajar.' },
+      { txt: 'SEGUIR', go: 'legajo', hidden: true }]
+  },
+  legajo: {
+    world: wMora, over: legajo, song: 'mora', day: 'MES 9', hud: { hel: 2, sue: 0, deu: 10 }, mora: true, enter: () => setTimeout(() => SFX.stamp(), 700),
+    text: 'Pasan los meses. El banco clasifica la deuda de tu tarjeta como *irrecuperable* y la saca de su balance: la da por perdida. Para el banco, el problema terminó. Vos seguís debiendo, seguís en la Central de Deudores y te siguen llamando.',
+    opts: [{ txt: 'SEGUIR', go: 'tele' }]
+  },
+  tele: {
+    world: lt => wTV(lt, false), song: 'news', day: 'MIENTRAS TANTO', hud: { hel: 2, sue: 0, deu: 10 },
+    over: lt => { tvNews(lt); achievement(lt, .6, 4, 'LOGRO DESBLOQUEADO', 'Bajó la mora'); },
+    enter: () => setTimeout(() => SFX.logro(), 600),
+    text: 'En la tele, el Gobierno festeja: *bajó la mora* de las familias, de 12,9% a 12,8%.',
+    opts: [{ txt: 'FESTEJAR', msg: '¿Festejar qué? A vos te siguen *llamando*.' }, { txt: '¿QUÉ MIDE ESE NÚMERO?', go: 'explica' }]
+  },
+  explica: {
+    world: lt => wTV(lt, true), over: tvCheck, song: 'news', day: 'MIENTRAS TANTO', hud: { hel: 2, sue: 0, deu: 10 },
+    text: 'Mide la mora sobre la plata que los bancos todavía tienen en sus balances: es un termómetro de la *salud de los bancos*. No cuenta las deudas con Mercado Libre, Naranja y otras empresas que no son bancos, ni las que los bancos ya dieron por perdidas. *Vos no estás en ese número.*',
+    opts: [{ txt: 'SEGUIR', go: 'ciudad' }]
+  },
+  ciudad: {
+    world: sceneCity, over: cityCounters, song: 'city', hud: null,
+    text: 'Y no sos la única. Contando todas las deudas, en agosto había *5.761.876 personas en mora*: 21.747 más que en julio. Y de toda la plata que deben las personas, el 27% está en mora.',
+    opts: [{ txt: 'SEGUIR', go: 'congreso' }]
+  },
+  congreso: {
+    world: sceneCong, song: 'hope', hud: null,
+    text: 'Salir de esto no es una elección individual: hace falta una ley. ¿Qué hace el Congreso?',
+    opts: [
+      { txt: 'APROBAR UNA SALIDA PARA LAS FAMILIAS ENDEUDADAS', msg: 'Esta elección no es tuya: es de *diputados y senadores*.', go: 'fin' },
+      { txt: 'MIRAR PARA OTRO LADO', msg: 'Esta elección no es tuya: es de *diputados y senadores*.', go: 'fin' }]
+  },
+  fin: {
+    world: wTitle, song: 'hope', hud: null,
+    over: () => {
+      bigTitle();
+      ['Fuente: Central de Deudores del BCRA, julio y agosto 2026.', 'Elaboración propia. Las tasas del juego son ilustrativas.']
+        .forEach((l, i) => plain(l, OW / 2, 330 + i * 30, 16, COL.mut));
+    },
+    text: 'Tu partida terminó. La de casi 5,8 millones de personas, *no*.',
+    opts: [{ txt: 'VOLVER A JUGAR', go: 'personaje', reset: true }, { txt: 'COMPARTIR', share: true }]
+  }
+};
+
+// ============================================================ estado y lógica
+const G = { id: 'title', enter: 0, textT0: 0, tried: new Set(), sel: 0, pop: null, fade: -9, stats: { hel: 0, sue: 0, deu: 0 },
+  target: { hel: 0, sue: 0, deu: 0 }, muted: false, deniedAt: {}, blips: 0 };
+const now = () => performance.now() / 1000;
+const key = (o, id = G.id) => id + ':' + o.txt;
+const exhausts = o => o.fail || o.deny || (o.msg && !o.go);
+const isOff = o => exhausts(o) && G.tried.has(key(o));
+function visibleOpts(scr = SCREENS[G.id]) {
+  const allTried = scr.opts.filter(o => !o.hidden && exhausts(o)).every(o => G.tried.has(key(o, Object.keys(SCREENS).find(k => SCREENS[k] === scr))));
+  return scr.opts.filter(o => !o.hidden || allTried);
+}
+function selectedTxt() { const v = visibleOpts(); return v[G.sel] ? v[G.sel].txt : ''; }
+function textDone(t) { return (t - G.textT0) * 55 >= plainLen(SCREENS[G.id].text); }
+const plainLen = s => s.replace(/\*/g, '').length;
+function firstEnabled() { const v = visibleOpts(); const i = v.findIndex(o => !isOff(o)); return i < 0 ? 0 : i; }
+
+function go(id, opt = {}) {
+  if (opt.reset) { G.tried.clear(); G.stats = { hel: 0, sue: 0, deu: 0 }; }
+  G.id = id; G.enter = now(); G.textT0 = now() + .25; G.fade = now(); G.blips = 0;
+  const scr = SCREENS[id];
+  if (scr.hud) G.target = { ...scr.hud };
+  G.sel = firstEnabled();
+  setSong(scr.song);
+  if (scr.enter && AC) scr.enter();
+}
+function popup(text, then) { G.pop = { text, then, t0: now() }; }
+function activate(o) {
+  if (isOff(o)) { SFX.buzz(); return; }
+  const scr = SCREENS[G.id], before = visibleOpts().length;
+  const after = () => {
+    const v = visibleOpts();
+    if (v.length > before) { SFX.unlock(); G.sel = v.length - 1; } else G.sel = firstEnabled();
+  };
+  if (o.share) { share(); return; }
+  if (o.deny) { G.tried.add(key(o)); G.deniedAt[key(o)] = now(); SFX.buzz(); after(); return; }
+  if (o.fail) { G.tried.add(key(o)); SFX.fail(); popup(o.fail, after); return; }
+  if (o.msg) {
+    SFX.select();
+    if (!o.go) G.tried.add(key(o));
+    popup(o.msg, () => { if (o.go) go(o.go, o); else after(); });
+    return;
+  }
+  if (o.go) { SFX.select(); go(o.go, o); }
+}
+async function share() {
+  const data = { title: 'Fin de mes', text: 'Un juego que juegan millones de personas todos los meses.', url: location.href };
+  try {
+    if (navigator.share) { await navigator.share(data); return; }
+    await navigator.clipboard.writeText(location.href); popup('Link copiado. Pasalo.', null);
+  } catch (e) { popup('Copiá el link de la barra del navegador y pasalo.', null); }
+}
+
+// ============================================================ dibujo del cuadro de texto
+let HITS = [];
+function layout(scr) {
+  const opts = visibleOpts(scr);
+  for (let size = 30; size >= 20; size -= 2) {
+    const osz = size - 4, lines = richWrap(scr.text, size, 930);
+    let oy = BOX_TOP + 50 + lines.length * size * 1.55 + 26;
+    const ol = opts.map(o => {
+      const L = richWrap(o.txt, osz, 850), extra = o.deny && G.tried.has(key(o)) ? 1 : 0;
+      const h = (L.length + extra) * osz * 1.5 + 20, r = { o, L, y: oy, h };
+      oy += h; return r;
+    });
+    if (oy + 20 <= BOX_BOTTOM || size === 20) return { size, osz, lines, ol };
+  }
+}
+function drawTextBox(t) {
+  const scr = SCREENS[G.id], L = layout(scr);
+  ctx.fillStyle = '#0b0b1c'; ctx.fillRect(0, BOX_TOP - 20, OW, OH - BOX_TOP + 20);
+  ctx.fillStyle = 'rgba(0,0,0,.95)'; ctx.fillRect(30, BOX_TOP, OW - 60, BOX_BOTTOM - BOX_TOP);
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 6; ctx.strokeRect(33, BOX_TOP + 3, OW - 66, BOX_BOTTOM - BOX_TOP - 6);
+  // texto con efecto de máquina de escribir
+  const shown = Math.max(0, Math.floor((t - G.textT0) * 55));
+  if (shown > G.blips * 3 && shown <= plainLen(scr.text) && AC && !G.muted) { G.blips = Math.ceil(shown / 3); SFX.blip(); }
+  setFont(L.size); ctx.textAlign = 'left';
+  let budget = shown;
+  L.lines.forEach((ln, i) => {
+    let x = 75; const yy = BOX_TOP + 40 + L.size + i * L.size * 1.55;
+    for (const p of ln.parts) {
+      if (budget <= 0) break;
+      const s = p.s.length > budget ? p.s.slice(0, budget) : p.s; budget -= p.s.length;
+      ctx.fillStyle = p.hi ? COL.hi : '#fff'; ctx.fillText(s, x, yy); x += ctx.measureText(p.s).width;
+    }
+  });
+  HITS = [];
+  if (!textDone(t)) return;
+  const a = seg(t - G.textT0 - plainLen(scr.text) / 55, 0, .25);
+  ctx.globalAlpha = a;
+  L.ol.forEach((r, i) => {
+    const off = isOff(r.o), sel = i === G.sel && !G.pop;
+    if (sel && !off) { ctx.fillStyle = 'rgba(255,225,53,.12)'; ctx.fillRect(50, r.y - 8, OW - 100, r.h - 4); }
+    const dt = now() - (G.deniedAt[key(r.o)] || -9), sh = dt < .35 ? (rand(Math.floor(dt * 60)) - .5) * 20 : 0;
+    r.L.forEach((ln, j) => {
+      let x = 120 + sh; const yy = r.y + L.osz + j * L.osz * 1.5;
+      setFont(L.osz); ctx.textAlign = 'left';
+      for (const p of ln.parts) { ctx.fillStyle = off ? '#555' : (sel ? COL.hi : (p.hi ? COL.hi : '#fff')); ctx.fillText(p.s, x, yy); x += ctx.measureText(p.s).width; }
+      if (off && r.o.fail) { ctx.fillStyle = '#666'; ctx.fillRect(116, yy - L.osz * .45, ln.w + 8, 4); }
+    });
+    if (r.o.deny && G.tried.has(key(r.o))) plain(r.o.deny, 120, r.y + L.osz + r.L.length * L.osz * 1.5, L.osz - 6, COL.red, 'left');
+    if (sel) triSide(88, r.y + L.osz * .55, 14, true, off ? '#555' : COL.hi);
+    HITS.push({ x: 40, y: r.y - 10, w: OW - 80, h: r.h, i });
+  });
+  ctx.globalAlpha = 1;
+}
+function drawPopup(t) {
+  const p = G.pop; if (!p) return;
+  ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(0, 0, OW, OH);
+  const lines = richWrap(p.text, 32, 800), h = lines.length * 50 + 130, y = 760 - h / 2;
+  drawBox(90, y, OW - 180, h, 1, COL.hi);
+  const shown = Math.floor((t - p.t0) * 60); let budget = shown;
+  setFont(32); ctx.textAlign = 'left';
+  lines.forEach((ln, i) => {
+    let x = OW / 2 - ln.w / 2; const yy = y + 70 + i * 50;
+    for (const q of ln.parts) {
+      if (budget <= 0) break;
+      const s = q.s.length > budget ? q.s.slice(0, budget) : q.s; budget -= q.s.length;
+      ctx.fillStyle = q.hi ? COL.hi : '#fff'; ctx.fillText(s, x, yy); x += ctx.measureText(q.s).width;
+    }
+  });
+  if (budget > 0 && blink(t, 2)) triSide(OW / 2, y + h - 40, 16, true, COL.hi);
+}
+function popDone(t) { return G.pop && (t - G.pop.t0) * 60 >= plainLen(G.pop.text); }
+
+function drawHUD(scr, lt) {
+  for (const k in G.stats) G.stats[k] += (G.target[k] - G.stats[k]) * .08;
+  if (!scr.hud) return;
+  ctx.fillStyle = 'rgba(0,0,0,.8)'; ctx.fillRect(30, 20, 900, 210);
+  if (scr.day) plain(scr.day, 60, 62, 20, COL.hi, 'left');
+  const row = (y, label, v, col, extra) => {
+    plain(label, 60, y, 22, '#fff', 'left');
+    for (let i = 0; i < 10; i++) { ctx.fillStyle = i < Math.round(v) ? col : '#2a2a38'; ctx.fillRect(300 + i * 44, y - 24, 36, 28); }
+    if (extra) plain(extra, 910, y, 18, col, 'right');
+  };
+  const hel = G.stats.hel, deu = G.stats.deu;
+  row(114, 'HELADERA', hel, hel < .5 ? (blink(lt, 3) ? COL.red : '#5a1a1a') : COL.green, hel < .5 ? 'VACÍA' : '');
+  row(160, 'SUELDO', G.stats.sue, '#6fb7ff', '');
+  row(206, 'DEUDA', deu, COL.red, scr.mora && blink(lt, 3) ? 'MORA' : '');
+}
+function drawMute() {
+  const x = 985, y = 50;
+  ctx.fillStyle = G.muted ? '#666' : '#fff';
+  ctx.fillRect(x - 24, y - 10, 14, 20); ctx.beginPath(); ctx.moveTo(x - 10, y - 10); ctx.lineTo(x + 6, y - 24); ctx.lineTo(x + 6, y + 24); ctx.lineTo(x - 10, y + 10); ctx.fill();
+  if (G.muted) { ctx.strokeStyle = COL.red; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(x + 14, y - 14); ctx.lineTo(x + 38, y + 14); ctx.moveTo(x + 38, y - 14); ctx.lineTo(x + 14, y + 14); ctx.stroke(); }
+  else { ctx.fillRect(x + 14, y - 12, 5, 24); ctx.fillRect(x + 26, y - 20, 5, 40); }
+}
+
+// ============================================================ bucle principal
+let lastRing = -1;
+function frame() {
+  const t = now(), scr = SCREENS[G.id], lt = t - G.enter;
+  scr.world(lt);
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, OW, OH);
+  const sw = W / CAM.z, sh = H / CAM.z;
+  ctx.drawImage(wc, CAM.x - sw / 2, CAM.y - sh / 2, sw, sh, 0, VIEW_DY, OW, OH);
+  scanlines();
+  if (scr.over) scr.over(lt);
+  drawHUD(scr, lt);
+  drawTextBox(t);
+  drawPopup(t);
+  drawMute();
+  if (G.id === 'mora' && AC && !G.muted) { const n = Math.floor(lt / 2.4); if (n !== lastRing && (lt % 2.4) < 1.5) { lastRing = n; SFX.ring(); } }
+  const f = t - G.fade; if (f < .3) { ctx.fillStyle = `rgba(0,0,0,${1 - f / .3})`; ctx.fillRect(0, 0, OW, OH); }
+  requestAnimationFrame(frame);
+}
+
+// ============================================================ entrada (toque, mouse, teclado)
+function startAudio() { if (!AC) { initAudio(); setSong(SCREENS[G.id].song); } if (AC.state !== 'running') AC.resume(); }
+function toCanvas(e) { const r = c.getBoundingClientRect(); return { x: (e.clientX - r.left) * OW / r.width, y: (e.clientY - r.top) * OH / r.height }; }
+function press(p) {
+  const t = now();
+  startAudio();
+  if (p && p.x > 930 && p.y < 110) { toggleMute(); return; }
+  if (G.pop) {
+    if (!popDone(t)) { G.pop.t0 = -1e9; return; }
+    const then = G.pop.then; G.pop = null; SFX.menu(); if (then) then(); return;
+  }
+  if (!textDone(t)) { G.textT0 = -1e9; return; }
+  if (p) {
+    const h = HITS.find(h => p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h);
+    if (h) { G.sel = h.i; activate(visibleOpts()[h.i]); }
+    return;
+  }
+  const o = visibleOpts()[G.sel]; if (o) activate(o);
+}
+function move(d) {
+  const v = visibleOpts(); if (!v.length || G.pop) return;
+  G.sel = (G.sel + d + v.length) % v.length; SFX.menu();
+}
+function toggleMute() { G.muted = !G.muted; if (AC) { master.gain.value = G.muted ? 0 : .17; musicGain.gain.value = G.muted ? 0 : MUSIC_VOL; } }
+c.addEventListener('pointerdown', e => { e.preventDefault(); press(toCanvas(e)); });
+c.addEventListener('pointermove', e => {
+  if (e.pointerType !== 'mouse' || G.pop) return;
+  const p = toCanvas(e), h = HITS.find(h => p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h);
+  if (h && h.i !== G.sel) { G.sel = h.i; SFX.menu(); }
+  c.style.cursor = h || (p.x > 930 && p.y < 110) ? 'pointer' : 'default';
+});
+document.addEventListener('keydown', e => {
+  if (['ArrowDown', 'ArrowRight', 's'].includes(e.key)) { e.preventDefault(); startAudio(); move(1); }
+  else if (['ArrowUp', 'ArrowLeft', 'w'].includes(e.key)) { e.preventDefault(); startAudio(); move(-1); }
+  else if (['Enter', ' '].includes(e.key)) { e.preventDefault(); press(null); }
+  else if (e.key === 'm' || e.key === 'M') toggleMute();
+});
+
+// ============================================================ audio: efectos y música en bucle
+const MUSIC_VOL = .14;
+let AC = null, master = null, musicGain = null, SCHED = 0;
+function initAudio() {
+  AC = new (window.AudioContext || window.webkitAudioContext)();
+  master = AC.createGain(); master.gain.value = .17; master.connect(AC.destination);
+  musicGain = AC.createGain(); musicGain.gain.value = MUSIC_VOL; musicGain.connect(AC.destination);
+}
+const now0 = () => AC.currentTime + SCHED;
+let song = null, nextStep = 0, stepIdx = 0;
+function setSong(name) {
+  if (!AC || song === name) { song = name; return; }
+  song = name; stepIdx = 0; nextStep = AC.currentTime + .08;
+}
+setInterval(() => {
+  if (!AC || !song || G.muted) return;
+  const sg = SONGS[song], step = 60 / sg.bpm / 2;
+  if (nextStep < AC.currentTime) nextStep = AC.currentTime + .02;
+  while (nextStep < AC.currentTime + .2) {
+    SCHED = nextStep - AC.currentTime;
+    const L = sg.lead[stepIdx % sg.lead.length], B = sg.bass[stepIdx % sg.bass.length], D = sg.drum[stepIdx % sg.drum.length];
+    const A = sg.arp ? sg.arp[stepIdx % sg.arp.length] : null;
+    if (L) leadNote(midi(L), step * .9);
+    if (A) arpNote(midi(A), step * .6);
+    if (B) bassNote(midi(B), step * 1.8);
+    if (D !== '.') drum(D);
+    SCHED = 0; nextStep += step; stepIdx++;
+  }
+}, 25);
+function arpNote(f, d) {
+  const t0 = now0(), o = AC.createOscillator(), g = AC.createGain();
+  o.type = 'square'; o.frequency.setValueAtTime(f, t0);
+  g.gain.setValueAtTime(.09, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + d);
+  o.connect(g); g.connect(musicGain); o.start(t0); o.stop(t0 + d + .02);
+}
+Object.assign(SFX, {
+  blip()   { tone(1100 + Math.random() * 200, .025, 'square', .05); },
+  fail()   { noise(.45, .35, 0, 180); tone(160, .45, 'sawtooth', .18, 0, 60); },
+  unlock() { [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, .09, 'square', .18, i * .06)); }
+});
+
+// ============================================================ arranque
+const startGame = () => { go('title'); requestAnimationFrame(frame); };
+document.fonts.load(`40px ${FONT}`).then(startGame, startGame);
+
+</script>
+</body>
+</html>
