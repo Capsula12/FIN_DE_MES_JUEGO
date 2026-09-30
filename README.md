@@ -7,7 +7,7 @@ Juego de elecciones que no se pueden elegir: toda decisión lleva a endeudarse, 
 
 ## Cómo se juega
 
-Tocar o hacer clic en las opciones. En computadora también: flechas para moverse, Enter para elegir, M para silenciar. El ícono del parlante arriba a la derecha prende y apaga el sonido.
+Tocar o hacer clic en las opciones. En computadora también: flechas para moverse, Enter para elegir, M para silenciar. Arriba a la derecha: el parlante prende y apaga el sonido, y el ícono de compartir abre el menú del teléfono (WhatsApp, redes) en cualquier momento; en computadoras sin ese menú, copia el link.
 
 ## Recorrido
 
@@ -21,7 +21,7 @@ Tocar o hacer clic en las opciones. En computadora también: flechas para movers
 8. El banco da la deuda por irrecuperable y la saca de su balance.
 9. En la tele: "bajó la mora". Qué mide ese número y a quién deja afuera.
 10. La ciudad: 5.761.876 personas en mora.
-11. El Congreso: la última elección no es tuya.
+11. El Congreso: "mirar para otro lado" es lo que eligen el Gobierno y sus representantes; "buscar una solución" tiene una propuesta que no quieren discutir. En los dos casos: hagámonos escuchar.
 
 ## Cómo editar
 

@@ -861,8 +861,8 @@ const SCREENS = {
     world: sceneCong, song: 'hope', hud: null,
     text: 'Salir de esto no es una elección individual: hace falta una ley. ¿Qué hace el Congreso?',
     opts: [
-      { txt: 'APROBAR UNA SALIDA PARA LAS FAMILIAS ENDEUDADAS', msg: 'Esta elección no es tuya: es de *diputados y senadores*.', go: 'fin' },
-      { txt: 'MIRAR PARA OTRO LADO', msg: 'Esta elección no es tuya: es de *diputados y senadores*.', go: 'fin' }]
+      { txt: 'BUSCAR UNA SOLUCIÓN PARA LAS FAMILIAS ENDEUDADAS', msg: 'Hay una propuesta para solucionarlo, pero *el Gobierno* y sus representantes no quieren discutirla. *Hagámonos escuchar* para que se trate.', go: 'fin' },
+      { txt: 'MIRAR PARA OTRO LADO', msg: 'Esa es la opción que eligen *el Gobierno* y sus representantes en el Congreso. *Hagámonos escuchar* para que solucionen este problema.', go: 'fin' }]
   },
   fin: {
     world: wTitle, song: 'hope', hud: null,
@@ -921,11 +921,14 @@ function activate(o) {
   if (o.go) { SFX.select(); go(o.go, o); }
 }
 async function share() {
-  const data = { title: 'Fin de mes', text: 'Un juego que juegan millones de personas todos los meses.', url: location.href };
-  try {
-    if (navigator.share) { await navigator.share(data); return; }
-    await navigator.clipboard.writeText(location.href); popup('Link copiado. Pasalo.', null);
-  } catch (e) { popup('Copiá el link de la barra del navegador y pasalo.', null); }
+  const url = location.href.split('#')[0];
+  const data = { title: 'Fin de mes', text: 'Fin de mes: un juego que juegan millones de personas todos los meses.', url };
+  if (navigator.share) {
+    try { await navigator.share(data); return; }
+    catch (e) { if (e.name === 'AbortError') return; }      // cerró el menú sin compartir: no pasa nada
+  }
+  try { await navigator.clipboard.writeText(url); popup('Link copiado. *Pasalo.*', null); }
+  catch (e) { popup('Copiá el link de la barra del navegador y *pasalo*.', null); }
 }
 
 // ============================================================ dibujo del cuadro de texto
@@ -1023,6 +1026,15 @@ function drawMute() {
   else { ctx.fillRect(x + 14, y - 12, 5, 24); ctx.fillRect(x + 26, y - 20, 5, 40); }
 }
 
+function drawShare() {
+  const x = 993, y = 140;
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.moveTo(x + 16, y - 20); ctx.lineTo(x - 16, y); ctx.lineTo(x + 16, y + 20); ctx.stroke();
+  ctx.fillStyle = COL.hi;
+  for (const [a, b] of [[x + 16, y - 20], [x - 16, y], [x + 16, y + 20]]) ctx.fillRect(a - 9, b - 9, 18, 18);
+}
+const onMute = p => p.x > 930 && p.y < 95, onShare = p => p.x > 930 && p.y >= 95 && p.y < 190;
+
 // ============================================================ bucle principal
 let lastRing = -1;
 function frame() {
@@ -1037,7 +1049,7 @@ function frame() {
   drawHUD(scr, lt);
   drawTextBox(t);
   drawPopup(t);
-  drawMute();
+  drawMute(); drawShare();
   if (G.id === 'mora' && AC && !G.muted) { const n = Math.floor(lt / 2.4); if (n !== lastRing && (lt % 2.4) < 1.5) { lastRing = n; SFX.ring(); } }
   const f = t - G.fade; if (f < .3) { ctx.fillStyle = `rgba(0,0,0,${1 - f / .3})`; ctx.fillRect(0, 0, OW, OH); }
   requestAnimationFrame(frame);
@@ -1049,7 +1061,8 @@ function toCanvas(e) { const r = c.getBoundingClientRect(); return { x: (e.clien
 function press(p) {
   const t = now();
   startAudio();
-  if (p && p.x > 930 && p.y < 110) { toggleMute(); return; }
+  if (p && onMute(p)) { toggleMute(); return; }
+  if (p && onShare(p)) { SFX.select(); share(); return; }
   if (G.pop) {
     if (!popDone(t)) { G.pop.t0 = -1e9; return; }
     const then = G.pop.then; G.pop = null; SFX.menu(); if (then) then(); return;
@@ -1067,12 +1080,12 @@ function move(d) {
   G.sel = (G.sel + d + v.length) % v.length; SFX.menu();
 }
 function toggleMute() { G.muted = !G.muted; if (AC) { master.gain.value = G.muted ? 0 : .17; musicGain.gain.value = G.muted ? 0 : MUSIC_VOL; } }
-c.addEventListener('pointerdown', e => { e.preventDefault(); press(toCanvas(e)); });
+c.addEventListener('click', e => press(toCanvas(e)));
 c.addEventListener('pointermove', e => {
   if (e.pointerType !== 'mouse' || G.pop) return;
   const p = toCanvas(e), h = HITS.find(h => p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h);
   if (h && h.i !== G.sel) { G.sel = h.i; SFX.menu(); }
-  c.style.cursor = h || (p.x > 930 && p.y < 110) ? 'pointer' : 'default';
+  c.style.cursor = h || onMute(p) || onShare(p) ? 'pointer' : 'default';
 });
 document.addEventListener('keydown', e => {
   if (['ArrowDown', 'ArrowRight', 's'].includes(e.key)) { e.preventDefault(); startAudio(); move(1); }
