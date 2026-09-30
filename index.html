@@ -770,9 +770,8 @@ const SCREENS = {
     opts: [
       { txt: 'Explicarles que hay que dejar de comer para sostener el superávit fiscal', fail: 'Muy patriótico. ' + HAMBRE },
       { txt: 'Recordarles que les hicieron creer que tenían derecho a comer tres veces por día', fail: 'Ahora lo saben. ' + HAMBRE },
-      { txt: 'Esperar a que derrame', fail: 'Esperaron. No derramó nada. ' + HAMBRE },
       { txt: 'Un vaso de agua y a dormir temprano', fail: 'A la mañana se despiertan con más hambre. ' + HAMBRE },
-      { txt: 'PEDIR PLATA PRESTADA', go: 'pagar', hidden: true }]
+      { txt: 'PEDIR PLATA PRESTADA', go: 'pagar' }]
   },
   pagar: {
     world: lt => wPhone(lt), over: lt => phoneScreen('pagos', lt), song: 'shop', day: 'MES 1 - DÍA 15', hud: { hel: 0, sue: 0, deu: 0 },

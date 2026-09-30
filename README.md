@@ -12,7 +12,7 @@ Tocar o hacer clic en las opciones. En computadora también: flechas para movers
 ## Recorrido
 
 1. Pantalla de inicio y elección de personaje (multimillonario: "los cupos están ocupados").
-2. La heladera vacía: las opciones ridículas no sacian el hambre hasta que sólo queda pedir plata.
+2. La heladera vacía: las opciones ridículas no sacian el hambre; pedir plata prestada está desde el principio, al final de la lista.
 3. Tarjeta y préstamo del banco rechazados; aparece Mercado Libre.
 4. Tasas de 15 %, 50 % y 70 % "no disponibles para vos"; sólo queda la de 150 %.
 5. La cuota se lleva medio sueldo: pagar o comprar comida.
